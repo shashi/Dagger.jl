@@ -538,6 +538,15 @@ function schedule!(ctx, state, procs=procs_to_use(ctx))
             end
             return true, cap, extra_util
         end
+        "Like `sum`, but replaces `nothing` entries with the average of non-`nothing` entries."
+        function impute_sum(xs)
+            avg = mean(skipnothing(xs))
+            total = 0
+            for x in xs
+                total += x !== nothing ? x : avg
+            end
+            total
+        end
 
         # Schedule tasks
         to_fire = Dict{Tuple{OSProc,<:Processor},Vector{Tuple{Thunk,<:Any}}}()
@@ -549,7 +558,27 @@ function schedule!(ctx, state, procs=procs_to_use(ctx))
             opts = merge(ctx.options, task.options)
             sig = signature(task, state)
 
-            # Try to select a processor
+            # Select processor with highest data locality, if possible
+            # TODO: Account for process-local data movement
+            inputs = filter(t->istask(t)||isa(t,Chunk), task.inputs)
+            chunks = [istask(input) ? state.cache[task] : input for input in inputs]
+            procs = unique(map(c->processor(c), chunks))
+            affinities = Dict(proc=>impute_sum(affinity(chunk)[2] for chunk in filter(c->get_parent(processor(c))==get_parent(proc), chunks)) for proc in procs)
+            sort!(procs, by=p->-affinities[p])
+            for proc in procs
+                gproc = get_parent(proc)
+                if can_use_proc(task, gproc, proc, opts)
+                    has_cap, cap, extra_util = has_capacity(proc, gproc.pid, opts.procutil, sig)
+                    if has_cap
+                        # Schedule task onto proc
+                        extra_util = extra_util isa MaxUtilization ? cap : extra_util
+                        push!(get!(()->Vector{Tuple{Thunk,<:Any}}(), to_fire, (gproc, proc)), (task, extra_util))
+                    end
+                end
+            end
+
+            # Select first compatible processor with capacity
+            # TODO: Skip procs that were checked above
             selected_entry = nothing
             entry = state.procs_cache_list[]
             cap, extra_util = nothing, nothing
