@@ -2,9 +2,10 @@ module Sch
 
 using Distributed
 import MemPool: DRef
+import Statistics: mean
 
 import ..Dagger
-import ..Dagger: Context, Processor, Thunk, ThunkFuture, ThunkFailedException, Chunk, OSProc, order, free!, dependents, noffspring, istask, inputs, unwrap_weak, affinity, tochunk, @dbg, @logmsg, timespan_start, timespan_end, unrelease, procs, move, capacity, chunktype, default_enabled, get_processors, execute!, rmprocs!, addprocs!, thunk_processor
+import ..Dagger: Context, Processor, Thunk, ThunkFuture, ThunkFailedException, Chunk, OSProc, order, free!, dependents, noffspring, istask, inputs, unwrap_weak, affinity, tochunk, @dbg, @logmsg, timespan_start, timespan_end, unrelease, procs, move, capacity, chunktype, processor, default_enabled, get_processors, get_parent, execute!, rmprocs!, addprocs!, thunk_processor
 
 const OneToMany = Dict{Thunk, Set{Thunk}}
 
@@ -540,7 +541,8 @@ function schedule!(ctx, state, procs=procs_to_use(ctx))
         end
         "Like `sum`, but replaces `nothing` entries with the average of non-`nothing` entries."
         function impute_sum(xs)
-            avg = mean(skipnothing(xs))
+            all(x->!isa(x, Chunk), xs) && return 0
+            avg = mean(filter(x->x isa Chunk, xs))
             total = 0
             for x in xs
                 total += x !== nothing ? x : avg
@@ -561,10 +563,11 @@ function schedule!(ctx, state, procs=procs_to_use(ctx))
             # Select processor with highest data locality, if possible
             # TODO: Account for process-local data movement
             inputs = filter(t->istask(t)||isa(t,Chunk), task.inputs)
-            chunks = [istask(input) ? state.cache[task] : input for input in inputs]
-            procs = unique(map(c->processor(c), chunks))
-            affinities = Dict(proc=>impute_sum(affinity(chunk)[2] for chunk in filter(c->get_parent(processor(c))==get_parent(proc), chunks)) for proc in procs)
+            chunks = [istask(input) ? state.cache[input] : input for input in inputs]
+            procs = unique(map(c->c isa Chunk ? processor(c) : OSProc(), chunks))
+            affinities = Dict(proc=>impute_sum([affinity(chunk)[2] for chunk in filter(c->isa(c,Chunk)&&get_parent(processor(c))==get_parent(proc), chunks)]) for proc in procs)
             sort!(procs, by=p->-affinities[p])
+            scheduled = false
             for proc in procs
                 gproc = get_parent(proc)
                 if can_use_proc(task, gproc, proc, opts)
@@ -573,9 +576,12 @@ function schedule!(ctx, state, procs=procs_to_use(ctx))
                         # Schedule task onto proc
                         extra_util = extra_util isa MaxUtilization ? cap : extra_util
                         push!(get!(()->Vector{Tuple{Thunk,<:Any}}(), to_fire, (gproc, proc)), (task, extra_util))
+                        scheduled = true
+                        break
                     end
                 end
             end
+            scheduled && continue
 
             # Select first compatible processor with capacity
             # TODO: Skip procs that were checked above
