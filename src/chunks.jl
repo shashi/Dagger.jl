@@ -35,11 +35,6 @@ mutable struct Chunk{T, H, P<:Processor}
     handle::H
     processor::P
     persist::Bool
-    function (::Type{Chunk{T,H,P}})(::Type{T}, domain, handle, processor, persist) where {T,H,P}
-        c = new{T,H,P}(T, domain, handle, processor, persist)
-        finalizer(x -> @async(myid() == 1 && free!(x)), c)
-        c
-    end
 end
 
 domain(c::Chunk) = c.domain
