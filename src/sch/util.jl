@@ -12,12 +12,12 @@ unwrap_nested_exception(err) = err
 "Prepares the scheduler to schedule `thunk`."
 function reschedule_inputs!(state, thunk, seen=Dict{Thunk,Bool}())
     haskey(seen, thunk) && return seen[thunk]
+    haskey(state.cache, thunk) && return false
     w = get!(()->Set{Thunk}(), state.waiting, thunk)
     scheduled = false
-    for input in thunk.inputs
+    for input in unwrap_weak.(thunk.inputs)
         if istask(input) || (input isa Chunk)
             push!(get!(()->Set{Thunk}(), state.waiting_data, input), thunk)
-            push!(get!(()->Set{Thunk}(), state.dependents, input), thunk)
         end
         istask(input) || continue
         if input in state.errored
@@ -34,6 +34,7 @@ function reschedule_inputs!(state, thunk, seen=Dict{Thunk,Bool}())
             error("Failed to reschedule $(input.id) for $(thunk.id)")
         end
     end
+    get!(()->Set{Thunk}(), state.waiting_data, thunk)
     if isempty(w) && !(thunk in state.errored)
         # Inputs are ready
         push!(state.ready, thunk)
@@ -56,11 +57,13 @@ function set_failed!(state, origin, thunk=origin)
         end
         delete!(state.futures, thunk)
     end
-    for dep in state.dependents[thunk]
-        if haskey(state.waiting, dep)
-            pop!(state.waiting, dep)
+    if haskey(state.waiting_data, thunk)
+        for dep in state.waiting_data[thunk]
+            if haskey(state.waiting, dep)
+                pop!(state.waiting, dep)
+            end
+            set_failed!(state, origin, dep)
         end
-        set_failed!(state, origin, dep)
     end
 end
 
@@ -109,9 +112,6 @@ function print_sch_status(io::IO, state, thunk; offset=0, limit=5, max_inputs=3)
         if haskey(state.waiting_data, input) && thunk in state.waiting_data[input]
             status *= "w"
         end
-        if haskey(state.dependents, input) && thunk in state.dependents[input]
-            status *= "d"
-        end
         if haskey(state.futures, input)
             status *= "f($(length(state.futures[input])))"
         end
@@ -139,6 +139,6 @@ function fetch_report(task)
 end
 
 function signature(task::Thunk, state)
-    inputs = map(x->istask(x) ? state.cache[x] : x, task.inputs)
+    inputs = map(x->istask(x) ? state.cache[x] : x, unwrap_weak.(task.inputs))
     Tuple{typeof(task.f), map(x->x isa Chunk ? x.chunktype : typeof(x), inputs)...}
 end

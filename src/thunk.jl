@@ -116,9 +116,10 @@ function Base.showerror(io::IO, ex::ThunkFailedException)
     Base.showerror(io, ex.ex)
 end
 
-struct EagerThunk
-    future::ThunkFuture
+mutable struct EagerThunk
     uid::Int
+    future::ThunkFuture
+    ref::DRef
 end
 Base.isready(t::EagerThunk) = isready(t.future)
 Base.wait(t::EagerThunk) = wait(t.future)
@@ -127,13 +128,26 @@ function Base.show(io::IO, t::EagerThunk)
     print(io, "EagerThunk ($(isready(t) ? "finished" : "running"))")
 end
 
+"When finalized, cleans-up the associated `EagerThunk`."
+mutable struct EagerThunkFinalizer
+    uid::Int
+    function EagerThunkFinalizer(uid)
+        x = new(uid)
+        finalizer(Sch.eager_cleanup, x)
+        x
+    end
+end
+
 function spawn(f, args...; kwargs...)
     if myid() == 1
         Dagger.Sch.init_eager()
-        future = ThunkFuture()
         uid = next_id()
-        put!(Dagger.Sch.EAGER_THUNK_CHAN, (future, uid, f, (args...,), (kwargs...,)))
-        EagerThunk(future, uid)
+        future = ThunkFuture()
+        ref = poolset(EagerThunkFinalizer(uid))
+        ev = Base.Event()
+        put!(Dagger.Sch.EAGER_THUNK_CHAN, (ev, future, uid, f, (args...,), (kwargs...,)))
+        wait(ev)
+        EagerThunk(uid, future, ref)
     else
         remotecall_fetch(spawn, 1, f, args...; kwargs...)
     end
