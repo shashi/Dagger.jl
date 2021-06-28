@@ -1,6 +1,6 @@
 const EAGER_INIT = Ref{Bool}(false)
 const EAGER_THUNK_CHAN = Channel(typemax(Int))
-const EAGER_ID_MAP = Dict{Int,Int}()
+const EAGER_ID_MAP = Dict{UInt,Int}()
 const EAGER_THUNK_MAP = Dict{Int,Thunk}()
 const EAGER_CONTEXT = Ref{Context}()
 const EAGER_STATE = Ref{ComputeState}()
@@ -104,7 +104,7 @@ function eager_cleanup(state, uid)
     delete!(EAGER_THUNK_MAP, tid)
 
     lock(state.lock) do
-        # N.B. cache expires on its own
+        # N.B. cache and errored expire automatically
         delete!(state.thunk_dict, thunk.id)
     end
 end

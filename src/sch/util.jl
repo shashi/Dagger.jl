@@ -20,8 +20,9 @@ function reschedule_inputs!(state, thunk, seen=Dict{Thunk,Bool}())
             push!(get!(()->Set{Thunk}(), state.waiting_data, input), thunk)
         end
         istask(input) || continue
-        if input in state.errored
+        if get(state.errored, input, false)
             set_failed!(state, input, thunk)
+            scheduled = true
             break # TODO: Allow collecting all error'd inputs
         end
         haskey(state.cache, input) && continue
@@ -34,11 +35,13 @@ function reschedule_inputs!(state, thunk, seen=Dict{Thunk,Bool}())
             error("Failed to reschedule $(input.id) for $(thunk.id)")
         end
     end
-    get!(()->Set{Thunk}(), state.waiting_data, thunk)
-    if isempty(w) && !(thunk in state.errored)
+    if isempty(w)
         # Inputs are ready
-        push!(state.ready, thunk)
         delete!(state.waiting, thunk)
+        if !get(state.errored, thunk, false)
+            get!(()->Set{Thunk}(), state.waiting_data, thunk)
+            push!(state.ready, thunk)
+        end
         return true
     else
         return scheduled
@@ -47,10 +50,9 @@ end
 
 "Marks `thunk` and all dependent thunks as failed."
 function set_failed!(state, origin, thunk=origin)
-    thunk in state.errored && return
-    push!(state.errored, thunk)
     filter!(x->x!==thunk, state.ready)
     state.cache[thunk] = ThunkFailedException(thunk, origin, state.cache[origin])
+    state.errored[thunk] = true
     if haskey(state.futures, thunk)
         for future in state.futures[thunk]
             put!(future, state.cache[thunk]; error=true)
@@ -59,11 +61,16 @@ function set_failed!(state, origin, thunk=origin)
     end
     if haskey(state.waiting_data, thunk)
         for dep in state.waiting_data[thunk]
-            if haskey(state.waiting, dep)
-                pop!(state.waiting, dep)
-            end
+            haskey(state.waiting, dep) &&
+                delete!(state.waiting, dep)
+            haskey(state.errored, dep) &&
+                continue
             set_failed!(state, origin, dep)
         end
+        delete!(state.waiting_data, thunk)
+    end
+    if haskey(state.waiting, thunk)
+        delete!(state.waiting, thunk)
     end
 end
 
@@ -77,7 +84,7 @@ end
 function print_sch_status(io::IO, state, thunk; offset=0, limit=5, max_inputs=3)
     function status_string(node)
         status = ""
-        if node in state.errored
+        if get(state.errored, node, false)
             status *= "E"
         end
         if node in state.ready
@@ -86,8 +93,6 @@ function print_sch_status(io::IO, state, thunk; offset=0, limit=5, max_inputs=3)
             status *= "R"
         elseif haskey(state.cache, node)
             status *= "C"
-        elseif node in state.finished
-            status *= "F"
         else
             status *= "?"
         end
