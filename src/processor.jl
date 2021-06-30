@@ -101,6 +101,7 @@ struct OSProc <: Processor
     end
 end
 const OSPROC_CACHE = Dict{Int,Vector{Processor}}()
+get_parent(proc::OSProc) = proc
 children(proc::OSProc) = OSPROC_CACHE[proc.pid]
 function get_proc_hierarchy()
     children = Processor[]
@@ -149,10 +150,16 @@ iscompatible_arg(proc::ThreadProc, opts, x) = true
 @static if VERSION >= v"1.3.0-DEV.573"
     function execute!(proc::ThreadProc, f, args...)
         tls = get_tls()
-        task = Threads.@spawn begin
+        task = Task() do
             set_tls!(tls)
             f(args...)
         end
+        ret = ccall(:jl_set_task_tid, Cint, (Any, Cint), task, proc.tid-1)
+        if ret == 0
+            error("jl_set_task_tid == 0")
+        end
+        @assert Threads.threadid(task) == proc.tid
+        schedule(task)
         try
             fetch(task)
         catch err

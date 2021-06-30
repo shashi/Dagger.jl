@@ -1,5 +1,3 @@
-
-using MemPool
 using Serialization
 
 export domain, UnitDomain, project, alignfirst, ArrayDomain
@@ -37,17 +35,13 @@ mutable struct Chunk{T, H, P<:Processor}
     handle::H
     processor::P
     persist::Bool
-    function (::Type{Chunk{T,H,P}})(::Type{T}, domain, handle, processor, persist) where {T,H,P}
-        c = new{T,H,P}(T, domain, handle, processor, persist)
-        finalizer(x -> @async(myid() == 1 && free!(x)), c)
-        c
-    end
 end
 
 domain(c::Chunk) = c.domain
 chunktype(c::Chunk) = c.chunktype
 persist!(t::Chunk) = (t.persist=true; t)
 shouldpersist(p::Chunk) = t.persist
+processor(c::Chunk) = c.processor
 affinity(c::Chunk) = affinity(c.handle)
 
 function unrelease(c::Chunk{<:Any,DRef})
@@ -101,7 +95,7 @@ move(to_proc::Processor, x) =
     move(OSProc(), to_proc, x)
 
 ### ChunkIO
-affinity(r::DRef) = Pair{OSProc, UInt64}[OSProc(r.owner) => r.size]
+affinity(r::DRef) = OSProc(r.owner)=>r.size
 function affinity(r::FileRef)
     if haskey(MemPool.who_has_read, r.file)
         Pair{OSProc, UInt64}[OSProc(dref.owner) => r.size for dref in MemPool.who_has_read[r.file]]
