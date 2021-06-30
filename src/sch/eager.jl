@@ -33,16 +33,16 @@ end
 
 "Adjusts the scheduler's cached pressure indicator for the specified worker by
 the specified amount."
-function adjust_pressure!(h::SchedulerHandle, proctype::Type, pressure)
+function adjust_pressure!(h::SchedulerHandle, proc::Processor, pressure)
     uid = Dagger.get_tls().sch_uid
-    lock(ACTIVE_TASKS_LOCK) do
-        ACTIVE_TASKS[uid][proctype][] += pressure
+    lock(TASK_SYNC) do
+        PROC_UTILIZATION[uid][proc][] += pressure
         notify(TASK_SYNC)
     end
-    exec!(_adjust_pressure!, h, myid(), proctype, pressure)
+    exec!(_adjust_pressure!, h, myid(), proc, pressure)
 end
-function _adjust_pressure!(ctx, state, task, tid, (pid, proctype, pressure))
-    state.worker_pressure[pid][proctype] += pressure
+function _adjust_pressure!(ctx, state, task, tid, (pid, proc, pressure))
+    state.worker_pressure[pid][proc] += pressure
     nothing
 end
 
@@ -52,13 +52,13 @@ function thunk_yield(f)
     if Dagger.in_thunk()
         h = sch_handle()
         tls = Dagger.get_tls()
-        proctype = typeof(tls.processor)
+        proc = tls.processor
         util = tls.utilization
-        adjust_pressure!(h, proctype, -util)
+        adjust_pressure!(h, proc, -util)
         try
             f()
         finally
-            adjust_pressure!(h, proctype, util)
+            adjust_pressure!(h, proc, util)
         end
     else
         f()
@@ -67,12 +67,12 @@ end
 
 function eager_thunk()
     h = sch_handle()
-    util = Dagger.get_tls().utilization
     exec!(h) do ctx, state, task, tid, _
         EAGER_STATE[] = state
     end
+    tls = Dagger.get_tls()
     # Don't apply pressure from this thunk
-    adjust_pressure!(h, Dagger.ThreadProc, -util)
+    adjust_pressure!(h, tls.processor, -tls.utilization)
     while isopen(EAGER_THUNK_CHAN)
         try
             ev, future, uid, f, args, opts = take!(EAGER_THUNK_CHAN)
