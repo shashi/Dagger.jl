@@ -8,9 +8,9 @@ mutable struct DTable
     thunksize::Int
 end
 
-function DTable(table::DataFrames.DataFrame; thunksize=10)
-    if (!Tables.istable(table))
-        throw("Provided input is not Tables.jl compatible.")
+function DTable(table::DataFrames.DataFrame; chunksize=10)
+    if !Tables.istable(table)
+        throw(ArgumentError("Provided input is not Tables.jl compatible."))
     end
     r = Dagger.@spawn Tables.rows(table)
     n = DataFrames.nrow(table)
