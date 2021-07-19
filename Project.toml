@@ -26,7 +26,9 @@ StatsBase = "0.28, 0.29, 0.30, 0.31, 0.32, 0.33"
 julia = "1.0"
 
 [extras]
+Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Test", "Arrow", "CSV"]
