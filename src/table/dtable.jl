@@ -1,21 +1,43 @@
 import DataFrames
 import Tables
 
-import Base: fetch, filter, map, setproperty!, eachrow
+import Base: fetch, filter, map
 
-mutable struct DTable
+struct DTable
     chunks::Vector{Dagger.EagerThunk}
+
+    DTable(chunks::Vector{Dagger.EagerThunk}) = new(chunks)
 end
 
-function DTable(table::DataFrames.DataFrame; chunksize=10)
+function DTable(table; chunksize=10_000)
     if !Tables.istable(table)
         throw(ArgumentError("Provided input is not Tables.jl compatible."))
     end
-    r = Dagger.@spawn Tables.rows(table)
-    n = DataFrames.nrow(table)
-    partition_rows = (x, l, r) -> getindex(x, l:r)
-    df_create = (rows,i) -> DataFrames.DataFrame( partition_rows(rows, i, (i + chunksize - 1) % (n + 1)))
-    return DTable([Dagger.@spawn df_create(r,i) for i in 1:chunksize:n])
+
+    create_chunk = (rows) -> Dagger.@spawn DataFrames.DataFrame(deepcopy(rows))
+    chunks = Vector{Dagger.EagerThunk}()
+
+    it = Tables.rows(table)
+    buffer = Vector{eltype(it)}()
+
+    p = iterate(it)
+    counter = 0
+
+    while !isnothing(p) 
+        push!(buffer, p[1])
+        counter += 1
+        p = iterate(it, p[2])
+        if counter == chunksize
+            push!(chunks, create_chunk(buffer))
+            empty!(buffer)
+            counter = 0 
+        end
+    end
+    if counter > 0
+        push!(chunks, create_chunk(buffer))
+        empty!(buffer)
+    end
+    return DTable(chunks)
 end
 
 function filter(f, d::DTable)
