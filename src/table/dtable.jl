@@ -13,13 +13,15 @@ function DTable(table; chunksize=10_000)
     if !Tables.istable(table)
         throw(ArgumentError("Provided input is not Tables.jl compatible."))
     end
-
-    create_chunk = (rows) -> Dagger.@spawn DataFrames.DataFrame(deepcopy(rows))
+    create_chunk = (rows) -> begin 
+        df = DataFrames.DataFrame(rows)
+        return Dagger.@spawn (()->df)()
+    end 
     chunks = Vector{Dagger.EagerThunk}()
 
     it = Tables.rows(table)
     buffer = Vector{eltype(it)}()
-
+    sizehint!(buffer, chunksize)
     p = iterate(it)
     counter = 0
 
